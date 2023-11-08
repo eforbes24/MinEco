@@ -25,7 +25,6 @@ const int finalCC = 4;
 const int CC = 4;
 const int minCC = 0;
 const int maxCC = 5;
-const double G_Rate = 0.01;
 // 0-Indexed (0 = 1)
 const int start_prey = 20;
 const int start_pred = 0;
@@ -38,7 +37,7 @@ const double BTStepSize = 0.01;
 // Evolution Run Time:
 const double RunDuration = 10000;
 // Behavioral Trace Run Time:
-const double PlotDuration = 10000;
+const double PlotDuration = 3000;
 // EcoRate Collection Run Time:
 const double RateDuration = 100000;
 // Sensory Sample Run Time:
@@ -51,6 +50,8 @@ const double MUTVAR = 0.1;
 const double CROSSPROB = 0.0;
 const double EXPECTED = 1.1;
 const double ELITISM = 0.02;
+// Number of trials per trial type (there are maxCC+1 * 2 trial types)
+const double n_trials = 2.0;
 
 // Nervous system params
 const int prey_netsize = 3; 
@@ -66,6 +67,9 @@ const double TMAX = 20.0;
 // Weights + TCs & Biases + SensorWeights
 const int VectSize = (prey_netsize*prey_netsize + 2*prey_netsize + 3*prey_netsize);
 
+// Producer Parameters
+const double G_Rate = 0.001*StepSize;
+const double BT_G_Rate = 0.001*BTStepSize;
 // Prey Sensory Parameters
 const double prey_gain = 3.5;
 const double prey_s_width = 100.0;
@@ -87,12 +91,18 @@ const double pred_s_width = 110.0;
 
 // Predator Metabolic Parameters
 const double pred_frate = 1.0;
-const double pred_handling_time = 100.0;
+const double pred_handling_time = 10.0/StepSize;
+const double pred_BT_handling_time = 10.0/BTStepSize;
 // For Predator Condition:
 // 1.0 drift left
 // 2.0 drift right
 // 3.0 stay still
-const double pred_condition = 3.0;
+const double pred_condition = 1.0;
+
+// File Names
+const string bestgen_string = "best.gen.dat";
+const string fitness_string = "fitness.dat";
+const string seed_string = "seed.dat";
 
 // ------------------------------------
 // Genotype-Phenotype Mapping Function
@@ -128,7 +138,6 @@ void GenPhenMapping(TVector<double> &gen, TVector<double> &phen)
 // ================================================
 // B. TASK ENVIRONMENT & FITNESS FUNCTION
 // ================================================
-
 double Coexist(TVector<double> &genotype, RandomState &rs) 
 {
     // Set running outcome variable
@@ -166,20 +175,27 @@ double Coexist(TVector<double> &genotype, RandomState &rs)
         Agent1.sensorweights[i] = phenotype(k);
         k++;
     }
+    // Set Trial Structure
+    TVector<TVector<double> > trials(0,-1);
+    for (int i = 0; i <= maxCC; i++){
+        for (int j = 0; j < n_trials; j++){
+            TVector<double> trialP1(0,1);
+            trialP1[0] = i;
+            trialP1[1] = 1.0;
+            TVector<double> trialP2(0,1);
+            trialP2[0] = i;
+            trialP2[1] = 2.0;
+            trials.SetBounds(0, trials.Size());
+            trials[trials.Size()-1] = trialP1;
+            trials.SetBounds(0, trials.Size());
+            trials[trials.Size()-1] = trialP2;
+        }
+    }
     // Run Simulation
-    for (int trial = 0; trial < 3*CoexistTrials; trial++){
+    for (int trial = 0; trial < trials.Size(); trial++){
         // Set Predator Condition for Trial
-        double pred_condition = 0.0;
-        if(trial < CoexistTrials){
-            pred_condition = 1.0;
-        }
-        else if(trial >= CoexistTrials && trial < 2*CoexistTrials){
-            pred_condition = 2.0;
-        }
-        else if(trial >= 2*CoexistTrials && trial < 3*CoexistTrials){
-            pred_condition = 3.0;
-        }
-        Agent2.condition = pred_condition;
+        double CC = trials[trial][0] * start_prey;
+        Agent2.condition = trials[trial][1];;
         // Reset Prey agent, randomize its location
         Agent1.Reset(rs.UniformRandomInteger(0,SpaceSize), 1.0);
         // Seed preylist with starting population
@@ -244,14 +260,14 @@ double Coexist(TVector<double> &genotype, RandomState &rs)
             }
             // Chance for new food to grow
             // Carrying capacity is 0 indexed, add 1 for true amount
-            double food_count = food_pos.Size();
-            double s_chance = food_count/(CC+1);
-            double c = rs.UniformRandom(0,1);
-            if (c > s_chance){
-                int f = rs.UniformRandomInteger(1,SpaceSize);
-                WorldFood[f] = 1.0;
-                food_pos.SetBounds(0, food_pos.Size());
-                food_pos[food_pos.Size()-1] = f;
+            for (int i = 0; i < CC+1 - food_pos.Size(); i++){
+                double c = rs.UniformRandom(0,1);
+                if (c <= G_Rate){
+                    int f = rs.UniformRandomInteger(1,SpaceSize);
+                    WorldFood[f] = 1.0;
+                    food_pos.SetBounds(0, food_pos.Size());
+                    food_pos[food_pos.Size()-1] = f;
+                }
             }
             // Update Prey Positions
             TVector<double> prey_pos;
@@ -337,7 +353,7 @@ double Coexist(TVector<double> &genotype, RandomState &rs)
         // Fitness part 2 is average population across the run
         double popmeasure = (running_pop/(RunDuration/StepSize));
         // Generate fitness
-        double fitmeasure = runmeasure + popmeasure/10;
+        double fitmeasure = runmeasure + popmeasure/(10*CC);
         // Keep minimum fitness value across trials
         if (fitmeasure < outcome){
             outcome = fitmeasure;
@@ -404,7 +420,7 @@ double BehavioralTracesCoexist (TVector<double> &genotype, RandomState &rs, doub
 	GenPhenMapping(genotype, phenotype);
     // Create agents
     Prey Agent1(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
-    Predator Agent2(pred_gain, pred_s_width, pred_frate,pred_handling_time);
+    Predator Agent2(pred_gain, pred_s_width, pred_frate, pred_BT_handling_time);
     // Set nervous system
     Agent1.NervousSystem.SetCircuitSize(prey_netsize);
     int k = 1;
@@ -441,7 +457,7 @@ double BehavioralTracesCoexist (TVector<double> &genotype, RandomState &rs, doub
     TVector<Prey> preylist(0,0);
     preylist[0] = Agent1;
     for (int i = 0; i < start_prey; i++){
-        Prey newprey(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_metaloss, prey_movecost, prey_b_thresh);
+        Prey newprey(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
         newprey.Reset(rs.UniformRandomInteger(0,SpaceSize), 1.0);
         newprey.NervousSystem = Agent1.NervousSystem;
         newprey.sensorweights = Agent1.sensorweights;
@@ -452,7 +468,7 @@ double BehavioralTracesCoexist (TVector<double> &genotype, RandomState &rs, doub
     TVector<Predator> predlist(0,0);
     predlist[0] = Agent2;
     for (int i = 0; i < start_pred; i++){
-        Predator newpred(pred_gain, pred_s_width, pred_frate, pred_handling_time);
+        Predator newpred(pred_gain, pred_s_width, pred_frate, pred_BT_handling_time);
         newpred.Reset(rs.UniformRandomInteger(0,SpaceSize));
         newpred.condition = pred_condition;
         predlist.SetBounds(0, predlist.Size());
@@ -485,15 +501,15 @@ double BehavioralTracesCoexist (TVector<double> &genotype, RandomState &rs, doub
             }
         }
         // Carrying capacity is 0 indexed, add 1 for true amount
-        double food_count = food_pos.Size();
-        double s_chance = food_count/(CC+1);
-        double c = rs.UniformRandom(0,1);
-        if (c > s_chance){
-            int f = rs.UniformRandomInteger(1,SpaceSize);
-            WorldFood[f] = 1.0;
-            food_pos.SetBounds(0, food_pos.Size());
-            food_pos[food_pos.Size()-1] = f;
-        }
+        for (int i = 0; i < ((CC+1) - food_pos.Size()); i++){
+                double c = rs.UniformRandom(0,1);
+                if (c <= BT_G_Rate){
+                    int f = rs.UniformRandomInteger(1,SpaceSize);
+                    WorldFood[f] = 1.0;
+                    food_pos.SetBounds(0, food_pos.Size());
+                    food_pos[food_pos.Size()-1] = f;
+                }
+            }
         // Update Prey Positions
         TVector<double> prey_pos;
         for (int i = 0; i < preylist.Size(); i++){
@@ -606,7 +622,7 @@ void DeriveLambdaH(Prey &prey, Predator &predator, RandomState &rs, double &maxC
             // Make dummy predator list
             TVector<double> pred_pos(0,-1);
             double munch_count = 0;
-            for (double time = 0; time < RateDuration; time += StepSize){
+            for (double time = 0; time < RateDuration; time += BTStepSize){
                 // Remove chomped food from food list
                 TVector<double> dead_food(0,-1);
                 for (int i = 0; i < food_pos.Size(); i++){
@@ -633,7 +649,7 @@ void DeriveLambdaH(Prey &prey, Predator &predator, RandomState &rs, double &maxC
                 }
                 // Prey Sense & Step
                 prey.Sense(food_pos, pred_pos);
-                prey.Step(StepSize, WorldFood);
+                prey.Step(BTStepSize, WorldFood);
                 // Check Births
                 if (prey.birth == true){
                     prey.state = prey.state - prey_repo;
@@ -650,7 +666,7 @@ void DeriveLambdaH(Prey &prey, Predator &predator, RandomState &rs, double &maxC
                     prey.snackflag = 0.0;
                 }
             }
-            double munchrate = munch_count/((RateDuration-transient)/StepSize);
+            double munchrate = munch_count/((RateDuration-transient)/BTStepSize);
             lambH.SetBounds(0, lambH.Size());
             lambH[lambH.Size()-1] = munchrate;
         }
@@ -683,7 +699,7 @@ void DeriveLambdaP(Prey &prey, Predator &predator, RandomState &rs, double &maxp
             TVector<double> prey_pos;
             preylist[0] = prey;
             for (int i = 0; i < j; i++){
-                Prey newprey(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_metaloss, prey_movecost, prey_b_thresh);
+                Prey newprey(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
                 newprey.Reset(rs.UniformRandomInteger(0,SpaceSize), 1.5);
                 newprey.NervousSystem = prey.NervousSystem;
                 newprey.sensorweights = prey.sensorweights;
@@ -691,7 +707,7 @@ void DeriveLambdaP(Prey &prey, Predator &predator, RandomState &rs, double &maxp
                 preylist[preylist.Size()-1] = newprey;
                 }
             double munch_count = 0;
-            for (double time = 0; time < RateDuration; time += StepSize){
+            for (double time = 0; time < RateDuration; time += BTStepSize){
                 // Remove chomped food from food list
                 TVector<double> dead_food(0,-1);
                 for (int i = 0; i < food_pos.Size(); i++){
@@ -729,7 +745,7 @@ void DeriveLambdaP(Prey &prey, Predator &predator, RandomState &rs, double &maxp
                     }
                     else{
                         preylist[i].Sense(food_pos, pred_pos);
-                        preylist[i].Step(StepSize, WorldFood);
+                        preylist[i].Step(BTStepSize, WorldFood);
                     }
                 }
                 for (int i = 0; i <= preylist.Size()-1; i++){
@@ -739,7 +755,7 @@ void DeriveLambdaP(Prey &prey, Predator &predator, RandomState &rs, double &maxp
 
                 // Predator Sense & Step
                 predator.Sense(prey_pos);
-                predator.Step(StepSize, WorldFood, preylist);
+                predator.Step(BTStepSize, WorldFood, preylist);
                 // Check # of times food crossed
                 if(time > transient){
                     munch_count += predator.snackflag;
@@ -747,7 +763,7 @@ void DeriveLambdaP(Prey &prey, Predator &predator, RandomState &rs, double &maxp
                 }
             }
 
-            double munchrate = munch_count/((RateDuration-transient)/StepSize);
+            double munchrate = munch_count/((RateDuration-transient)/BTStepSize);
             lambC.SetBounds(0, lambC.Size());
             lambC[lambC.Size()-1] = munchrate;
         }
@@ -766,8 +782,8 @@ void CollectEcoRates(TVector<double> &genotype, RandomState &rs)
 	phenotype.SetBounds(1, VectSize);
 	GenPhenMapping(genotype, phenotype);
     // Create agents
-    Prey Agent1(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_metaloss, prey_movecost, prey_b_thresh);
-    Predator Agent2(pred_gain, pred_s_width, pred_frate, pred_handling_time);
+    Prey Agent1(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
+    Predator Agent2(pred_gain, pred_s_width, pred_frate, pred_BT_handling_time);
     Agent2.condition = pred_condition;
     // Set nervous system
     Agent1.NervousSystem.SetCircuitSize(prey_netsize);
@@ -833,7 +849,7 @@ void SensorySample(TVector<double> &genotype, RandomState &rs)
 	GenPhenMapping(genotype, phenotype);
     // Create agents
     Prey Agent1(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
-    Predator Agent2(pred_gain, pred_s_width, pred_frate, pred_handling_time);
+    Predator Agent2(pred_gain, pred_s_width, pred_frate, pred_BT_handling_time);
     Agent2.condition = pred_condition;
     // Set nervous system
     Agent1.NervousSystem.SetCircuitSize(prey_netsize);
@@ -1355,7 +1371,7 @@ void NewEco(TVector<double> &genotype, RandomState &rs)
 	GenPhenMapping(genotype, phenotype);
     // Create agents
     // Playing with feff, frate, metaloss
-    Prey Agent1(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_metaloss, prey_movecost, prey_b_thresh);
+    Prey Agent1(prey_netsize, prey_gain, prey_s_width, prey_frate, prey_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
     // Set nervous system
     Agent1.NervousSystem.SetCircuitSize(prey_netsize);
     int k = 1;
@@ -1408,7 +1424,7 @@ void NewEco(TVector<double> &genotype, RandomState &rs)
         }
     }
     for (int i = 0; i < start_prey; i++){
-        Prey newprey(prey_netsize, prey_gain, prey_s_width, test_frate, test_feff, prey_metaloss, prey_movecost, prey_b_thresh);
+        Prey newprey(prey_netsize, prey_gain, prey_s_width, test_frate, test_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
         newprey.Reset(rs.UniformRandomInteger(0,SpaceSize), 1.5);
         newprey.NervousSystem = Agent1.NervousSystem;
         newprey.sensorweights = Agent1.sensorweights;
@@ -1449,7 +1465,7 @@ void NewEco(TVector<double> &genotype, RandomState &rs)
             if (preylist[i].birth == true){
                 preylist[i].state = preylist[i].state - prey_repo;
                 preylist[i].birth = false;
-                Prey newprey(prey_netsize, prey_gain, prey_s_width, test_frate, test_feff, prey_metaloss, prey_movecost, prey_b_thresh);
+                Prey newprey(prey_netsize, prey_gain, prey_s_width, test_frate, test_feff, prey_BT_metaloss, prey_movecost, prey_b_thresh);
                 newprey.NervousSystem = preylist[i].NervousSystem;
                 newprey.sensorweights = preylist[i].sensorweights;
                 newprey.Reset(preylist[i].pos+2, prey_repo);
@@ -1499,100 +1515,81 @@ int main (int argc, const char* argv[])
 // ================================================
 // EVOLUTION
 // ================================================
-	// TSearch s(VectSize);
-    // long seed = static_cast<long>(time(NULL));
-	// // save the seed to a file
-	// ofstream seedfile;
-	// seedfile.open ("seed.dat");
-	// seedfile << seed << endl;
-	// seedfile.close();
-	// // Configure the search
-	// s.SetRandomSeed(seed);
-	// s.SetSearchResultsDisplayFunction(ResultsDisplay);
-	// s.SetPopulationStatisticsDisplayFunction(EvolutionaryRunDisplay);
-	// s.SetSelectionMode(RANK_BASED);
-	// s.SetReproductionMode(GENETIC_ALGORITHM);
-	// s.SetPopulationSize(POPSIZE);
-	// s.SetMaxGenerations(GENS);
-	// s.SetCrossoverProbability(CROSSPROB);
-	// s.SetCrossoverMode(UNIFORM);
-	// s.SetMutationVariance(MUTVAR);
-	// s.SetMaxExpectedOffspring(EXPECTED);
-	// s.SetElitistFraction(ELITISM);
-	// // s.SetSearchConstraint(1);
-    // ofstream evolfile;
-	// evolfile.open("fitness.dat");
-	// cout.rdbuf(evolfile.rdbuf());
+	TSearch s(VectSize);
+    long seed = static_cast<long>(time(NULL));
+	// save the seed to a file
+	ofstream seedfile;
+	seedfile.open (seed_string);
+	seedfile << seed << endl;
+	seedfile.close();
+	// Configure the search
+	s.SetRandomSeed(seed);
+	s.SetSearchResultsDisplayFunction(ResultsDisplay);
+	s.SetPopulationStatisticsDisplayFunction(EvolutionaryRunDisplay);
+	s.SetSelectionMode(RANK_BASED);
+	s.SetReproductionMode(GENETIC_ALGORITHM);
+	s.SetPopulationSize(POPSIZE);
+	s.SetMaxGenerations(GENS);
+	s.SetCrossoverProbability(CROSSPROB);
+	s.SetCrossoverMode(UNIFORM);
+	s.SetMutationVariance(MUTVAR);
+	s.SetMaxExpectedOffspring(EXPECTED);
+	s.SetElitistFraction(ELITISM);
+	// s.SetSearchConstraint(1);
+    ofstream evolfile;
+	evolfile.open(fitness_string);
+	cout.rdbuf(evolfile.rdbuf());
 
-    // // Staged Evolution: Progressively Reduce Carrying Capacity
-    // for (int i = maxCC; i >= minCC; i--){
-    //     int CC = i;
-    //     printf("Carrying Capacity: %d\n", CC);
-    //     s.SetSearchTerminationFunction(CCTerminationFunction);
-    //     s.SetEvaluationFunction(Coexist);
-    //     s.ExecuteSearch();
-    //     ofstream S1B;
-    //     TVector<double> bestVector1 = s.BestIndividual();
-    //     S1B.open("best.gen.dat");
-    //     cout.rdbuf(S1B.rdbuf());
-    //     S1B << setprecision(32);
-    //     S1B << bestVector1 << endl;
-    //     S1B.close();
-    //     cout.rdbuf(evolfile.rdbuf());
-    // }
-
-    // printf("Final Tuning\n");
-    // int CC = finalCC;
-    // s.SetSearchTerminationFunction(EndTerminationFunction);
-    // s.SetEvaluationFunction(Coexist);
-    // s.ExecuteSearch();
-    // ofstream S1B;
-    // TVector<double> bestVector1 = s.BestIndividual();
-    // S1B.open("best.gen.dat");
-    // cout.rdbuf(S1B.rdbuf());
-    // S1B << setprecision(32);
-    // S1B << bestVector1 << endl;
-    // S1B.close();
-    // cout.rdbuf(evolfile.rdbuf());
+    s.SetSearchTerminationFunction(EndTerminationFunction);
+    s.SetEvaluationFunction(Coexist);
+    s.ExecuteSearch();
+    ofstream S1B;
+    TVector<double> bestVector1 = s.BestIndividual();
+    S1B.open(bestgen_string);
+    cout.rdbuf(S1B.rdbuf());
+    S1B << setprecision(32);
+    S1B << bestVector1 << endl;
+    S1B.close();
+    cout.rdbuf(evolfile.rdbuf());
     
-    // return 0;
+    return 0;
 
 // ================================================
 // RUN ANALYSES
 // ================================================
-    // load the seed
-    ifstream seedfile;
-    double seed;
-    seedfile.open("seed.dat");
-    seedfile >> seed;
-    seedfile.close();
-    // load best individual
-    ifstream genefile;
-    genefile.open("menagerie/bigredgen2.dat");
-    TVector<double> genotype(1, VectSize);
-	genefile >> genotype;
-    genefile.close();
-    // set the seed
-    RandomState rs(seed);
+    // // load the seed
+    // ifstream seedfile;
+    // double seed;
+    // seedfile.open("seed.dat");
+    // seedfile >> seed;
+    // seedfile.close();
+    // // load best individual
+    // ifstream genefile;
+    // genefile.open("menagerie/bigredgen2.dat");
+    // TVector<double> genotype(1, VectSize);
+	// genefile >> genotype;
+    // genefile.close();
+    // // set the seed
+    // RandomState rs(seed);
 
-    // // Behavioral Traces // // 
+    // // // Behavioral Traces // // 
     // BehavioralTracesCoexist(genotype, rs, pred_condition);
 
-    // // Interaction Rate Collection // //
-    // CollectEcoRates(genotype, rs);
+    // // // Interaction Rate Collection // //
+    // // CollectEcoRates(genotype, rs);
 
-    // // Sensory Sample Collection // //
-    // SensorySample(genotype, rs);
+    // // // Sensory Sample Collection // //
+    // // SensorySample(genotype, rs);
 
-    // // EcoFear Analysis // // 
-    // EcoFear(genotype, rs, pred_condition);
+    // // // EcoFear Analysis // // 
+    // // EcoFear(genotype, rs, pred_condition);
 
-    // // Sensory Pollution Analysis // // 
-    // SPoll(genotype, rs, pred_condition);
+    // // // Sensory Pollution Analysis // // 
+    // // SPoll(genotype, rs, pred_condition);
 
-    // // Code Testbed // // 
-    NewEco(genotype, rs);
+    // // // Code Testbed // // 
+    // // NewEco(genotype, rs);
 
-    return 0;
+    // return 0;
 
 }
